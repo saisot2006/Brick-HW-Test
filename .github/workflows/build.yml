@@ -1,0 +1,65 @@
+
+name: Build Brick HW Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "src/main.c"
+      - "MusicPlayer.pak/launch.sh"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/loveretro/tg5040-toolchain:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discover compiler and SDL2
+        id: d
+        run: |
+          set -e
+          CC=$(find / -maxdepth 10 -type f -iname 'aarch64*gcc*' 2>/dev/null | grep -v '\.so' | head -n1)
+          SDL_H=$(find / -maxdepth 10 -path '*/SDL2/SDL.h' 2>/dev/null | head -n1)
+          SDL_LIB=$(find / -maxdepth 10 -iname 'libSDL2.so*' 2>/dev/null | head -n1)
+          TTF_LIB=$(find / -maxdepth 10 -iname 'libSDL2_ttf.so*' 2>/dev/null | head -n1)
+          test -n "$CC"; test -n "$SDL_H"
+          echo "cc=$CC" >> "$GITHUB_OUTPUT"
+          echo "h=$SDL_H" >> "$GITHUB_OUTPUT"
+          echo "lib=$(dirname "$SDL_LIB")" >> "$GITHUB_OUTPUT"
+
+      - name: Get font
+        run: |
+          mkdir -p resource MusicPlayer.pak/resource
+          apt-get update -y && apt-get install -y fonts-dejavu-core
+          cp "$(find /usr/share/fonts -iname 'DejaVuSans.ttf' | head -n1)" resource/font.ttf
+          cp resource/font.ttf MusicPlayer.pak/resource/font.ttf
+
+      - name: Build
+        run: |
+          CC="${{ steps.d.outputs.cc }}"
+          H="${{ steps.d.outputs.h }}"
+          INC="$(dirname "$(dirname "$H")")"
+          LIB="${{ steps.d.outputs.lib }}"
+          mkdir -p MusicPlayer.pak/bin
+          "$CC" src/main.c -o MusicPlayer.pak/bin/hwtest.elf \
+            -O2 -mcpu=cortex-a53 \
+            -I"$INC" -L"$LIB" \
+            -lSDL2 -lSDL2_ttf -lm
+          chmod +x MusicPlayer.pak/bin/hwtest.elf MusicPlayer.pak/launch.sh
+          file MusicPlayer.pak/bin/hwtest.elf
+
+      - name: Package
+        run: |
+          zip -r Brick.HW.Test.pak.zip MusicPlayer.pak
+
+      - name: Upload PAK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Brick.HW.Test.pak
+          path: Brick.HW.Test.pak.zip
