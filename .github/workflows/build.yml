@@ -1,30 +1,76 @@
-#!/bin/sh
-PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-cd "$PAK_DIR" || exit 1
 
-# NextUI normally provides LOGS_PATH. Keep a safe fallback so the PAK
-# never fails just because the variable is missing.
-LOG_DIR="${LOGS_PATH:-$PAK_DIR/logs}"
-mkdir -p "$LOG_DIR"
+name: Build Brick HW Test
 
-# Keep the same direct-ELF launch model as the known-working Brick.HW.Test.pak.
-# Never call show.elf/say.elf.
-{
-  echo "== Brick HW Test =="
-  echo "date: $(date)"
-  echo "uname: $(uname -a)"
-  echo "model:"
-  cat /proc/device-tree/model 2>/dev/null | tr -d '\000'; echo
-  echo "== audio env =="
-  env | grep -i -E 'SDL|ALSA|AUDIO|PLATFORM|DEVICE' 2>/dev/null
-  echo "== aplay -l =="
-  command -v aplay >/dev/null 2>&1 && aplay -l 2>&1 || echo "aplay: unavailable"
-  echo "== aplay hw params (default) =="
-  command -v aplay >/dev/null 2>&1 && aplay -D default --dump-hw-params /dev/zero 2>&1 | head -160 || true
-  echo "== /proc/asound =="
-  cat /proc/asound/cards 2>/dev/null
-  cat /proc/asound/pcm 2>/dev/null
-} > "$LOG_DIR/Brick_HW_Test_raw.txt" 2>&1
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - "src/main.c"
+      - "Brick.HW.Test.pak/launch.sh"
+      - ".github/workflows/build.yml"
 
-./bin/hwtest.elf > "$LOG_DIR/Brick_HW_Test.txt" 2>&1
-exit $?
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/loveretro/tg5040-toolchain:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Discover compiler and SDL2
+        id: d
+        run: |
+          set -e
+          CC=$(find / -maxdepth 10 -type f -iname 'aarch64*gcc*' 2>/dev/null | grep -v '\.so' | head -n1)
+          SDL_H=$(find / -maxdepth 10 -path '*/SDL2/SDL.h' 2>/dev/null | head -n1)
+          SDL_LIB=$(find / -maxdepth 10 -iname 'libSDL2.so*' 2>/dev/null | head -n1)
+          TTF_LIB=$(find / -maxdepth 10 -iname 'libSDL2_ttf.so*' 2>/dev/null | head -n1)
+          test -n "$CC"; test -n "$SDL_H"
+          echo "cc=$CC" >> "$GITHUB_OUTPUT"
+          echo "h=$SDL_H" >> "$GITHUB_OUTPUT"
+          echo "lib=$(dirname "$SDL_LIB")" >> "$GITHUB_OUTPUT"
+
+      - name: Get font
+        run: |
+          mkdir -p resource Brick.HW.Test.pak/resource
+          apt-get update -y && apt-get install -y fonts-dejavu-core
+          cp "$(find /usr/share/fonts -iname 'DejaVuSans.ttf' | head -n1)" resource/font.ttf
+          cp resource/font.ttf Brick.HW.Test.pak/resource/font.ttf
+
+      - name: Build
+        run: |
+          CC="${{ steps.d.outputs.cc }}"
+          H="${{ steps.d.outputs.h }}"
+          INC="$(dirname "$(dirname "$H")")"
+          LIB="${{ steps.d.outputs.lib }}"
+          mkdir -p Brick.HW.Test.pak/bin
+          "$CC" src/main.c -o Brick.HW.Test.pak/bin/hwtest.elf \
+            -O2 -mcpu=cortex-a53 \
+            -I"$INC" -L"$LIB" \
+            -lSDL2 -lSDL2_ttf -lm
+          chmod +x Brick.HW.Test.pak/bin/hwtest.elf Brick.HW.Test.pak/launch.sh
+          file Brick.HW.Test.pak/bin/hwtest.elf
+
+      - name: Package (no zip utility required)
+        run: |
+          python3 - <<'PYZIP'
+          import os, zipfile
+          root = "Brick.HW.Test.pak"
+          out = "Brick.HW.Test.pak.zip"
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for base, dirs, files in os.walk(root):
+                  for name in files:
+                      path = os.path.join(base, name)
+                      z.write(path, path)
+          print("created", out)
+          PYZIP
+          python3 -m zipfile -l Brick.HW.Test.pak.zip
+
+      - name: Upload PAK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Brick.HW.Test.pak
+          path: Brick.HW.Test.pak.zip
