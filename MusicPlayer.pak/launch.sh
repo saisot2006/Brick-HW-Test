@@ -2,6 +2,11 @@
 PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$PAK_DIR" || exit 1
 
+# NextUI normally provides LOGS_PATH. Keep a safe fallback so the PAK
+# never fails just because the variable is missing.
+LOG_DIR="${LOGS_PATH:-$PAK_DIR/logs}"
+mkdir -p "$LOG_DIR"
+
 # Keep the same direct-ELF launch model as the known-working MusicPlayer.pak.
 # Never call show.elf/say.elf.
 {
@@ -19,7 +24,7 @@ cd "$PAK_DIR" || exit 1
   echo "== /proc/asound =="
   cat /proc/asound/cards 2>/dev/null
   cat /proc/asound/pcm 2>/dev/null
-} > "$LOGS_PATH/Brick_HW_Test_raw.txt" 2>&1
+} > "$LOG_DIR/Brick_HW_Test_raw.txt" 2>&1
 
-./bin/hwtest.elf > "$LOGS_PATH/Brick_HW_Test.txt" 2>&1
+./bin/hwtest.elf > "$LOG_DIR/Brick_HW_Test.txt" 2>&1
 exit $?
