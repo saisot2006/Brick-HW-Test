@@ -54,9 +54,20 @@ jobs:
           chmod +x MusicPlayer.pak/bin/hwtest.elf MusicPlayer.pak/launch.sh
           file MusicPlayer.pak/bin/hwtest.elf
 
-      - name: Package
+      - name: Package (no zip utility required)
         run: |
-          zip -r Brick.HW.Test.pak.zip MusicPlayer.pak
+          python3 - <<'PYZIP'
+          import os, zipfile
+          root = "MusicPlayer.pak"
+          out = "Brick.HW.Test.pak.zip"
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for base, dirs, files in os.walk(root):
+                  for name in files:
+                      path = os.path.join(base, name)
+                      z.write(path, path)
+          print("created", out)
+          PYZIP
+          python3 -m zipfile -l Brick.HW.Test.pak.zip
 
       - name: Upload PAK
         uses: actions/upload-artifact@v4
