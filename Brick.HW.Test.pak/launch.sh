@@ -2,13 +2,12 @@
 PAK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$PAK_DIR" || exit 1
 
-# NextUI normally provides LOGS_PATH. Keep a safe fallback so the PAK
-# never fails just because the variable is missing.
 LOG_DIR="${LOGS_PATH:-$PAK_DIR/logs}"
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" 2>/dev/null || LOG_DIR="$PAK_DIR/logs"
+mkdir -p "$LOG_DIR" 2>/dev/null
 
-# Keep the same direct-ELF launch model as the known-working Brick.HW.Test.pak.
-# Never call show.elf/say.elf.
+# SAFE MODE: do not run aplay or any potentially blocking audio command here.
+# Only read proc/sys information; the native UI handles exit immediately.
 {
   echo "== Brick HW Test =="
   echo "date: $(date)"
@@ -16,15 +15,16 @@ mkdir -p "$LOG_DIR"
   echo "model:"
   cat /proc/device-tree/model 2>/dev/null | tr -d '\000'; echo
   echo "== audio env =="
-  env | grep -i -E 'SDL|ALSA|AUDIO|PLATFORM|DEVICE' 2>/dev/null
-  echo "== aplay -l =="
-  command -v aplay >/dev/null 2>&1 && aplay -l 2>&1 || echo "aplay: unavailable"
-  echo "== aplay hw params (default) =="
-  command -v aplay >/dev/null 2>&1 && aplay -D default --dump-hw-params /dev/zero 2>&1 | head -160 || true
-  echo "== /proc/asound =="
-  cat /proc/asound/cards 2>/dev/null
-  cat /proc/asound/pcm 2>/dev/null
+  env | grep -i -E 'SDL|ALSA|AUDIO|PLATFORM|DEVICE' 2>/dev/null || true
+  echo "== /proc/asound/cards =="
+  cat /proc/asound/cards 2>/dev/null || true
+  echo "== /proc/asound/pcm =="
+  cat /proc/asound/pcm 2>/dev/null || true
+  echo "== /proc/asound/card0 =="
+  find /proc/asound/card0 -maxdepth 2 -type f -print 2>/dev/null | sort | while read f; do
+    echo "--- $f"
+    cat "$f" 2>/dev/null | head -80 || true
+  done
 } > "$LOG_DIR/Brick_HW_Test_raw.txt" 2>&1
 
-./bin/hwtest.elf > "$LOG_DIR/Brick_HW_Test.txt" 2>&1
-exit $?
+exec ./bin/hwtest.elf
