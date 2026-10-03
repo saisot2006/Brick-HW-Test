@@ -20,10 +20,26 @@ mkdir -p "$LOG_DIR" 2>/dev/null
   cat /proc/asound/cards 2>/dev/null || true
   echo "== /proc/asound/pcm =="
   cat /proc/asound/pcm 2>/dev/null || true
-  echo "== /proc/asound/card0 =="
-  find /proc/asound/card0 -maxdepth 2 -type f -print 2>/dev/null | sort | while read f; do
+  echo "== /proc/asound/card0 (read-only) =="
+  find /proc/asound/card0 -maxdepth 4 -type f -print 2>/dev/null | sort | while read f; do
     echo "--- $f"
     cat "$f" 2>/dev/null | head -80 || true
+  done
+  echo "== /sys/class/sound =="
+  find /sys/class/sound -maxdepth 3 -type f -print 2>/dev/null | sort | while read f; do
+    echo "--- $f"
+    cat "$f" 2>/dev/null | head -80 || true
+  done
+  echo "== PCM sysfs =="
+  for d in /sys/class/sound/pcmC0D0p /sys/class/sound/pcmC0D0c; do
+    if [ -d "$d" ]; then
+      echo "--- $d"
+      readlink -f "$d" 2>/dev/null || true
+      find "$d" -maxdepth 3 -type f -print 2>/dev/null | sort | while read f; do
+        echo "--- $f"
+        cat "$f" 2>/dev/null | head -80 || true
+      done
+    fi
   done
 } > "$LOG_DIR/Brick_HW_Test_raw.txt" 2>&1
 
