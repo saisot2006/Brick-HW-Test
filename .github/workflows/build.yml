@@ -1,44 +1,19 @@
-name: Build Brick HW Test
+- name: Build
+  shell: bash
+  run: |
+    set -e
+    mkdir -p Brick.HW.Test.pak
 
-on:
-  workflow_dispatch:
-  push:
+    SDL_CFLAGS="$(sdl-config --cflags)"
+    SDL_LIBS="$(sdl-config --libs)"
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    container: ghcr.io/loveretro/tg5040-toolchain:latest
-    steps:
-      - uses: actions/checkout@v4
+    ${CC:-aarch64-nextui-linux-gnu-gcc} \
+      $SDL_CFLAGS \
+      -O2 \
+      -o Brick.HW.Test.pak/hwtest.elf \
+      src/main.c \
+      $SDL_LIBS \
+      -lasound
 
-      - name: Build
-        shell: bash
-        run: |
-          set -e
-          mkdir -p Brick.HW.Test.pak
-          ${CC:-aarch64-linux-gnu-gcc} \
-            -O2 -o Brick.HW.Test.pak/hwtest.elf src/main.c \
-            $(sdl-config --cflags --libs 2>/dev/null || echo "") \
-            -lasound
-          chmod +x Brick.HW.Test.pak/launch.sh Brick.HW.Test.pak/hwtest.elf
-
-      - name: Package
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import zipfile
-          from pathlib import Path
-          out = Path("Brick.HW.Test.pak.zip")
-          root = Path("Brick.HW.Test.pak")
-          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-              for p in root.rglob("*"):
-                  if p.is_file():
-                      z.write(p, p.relative_to(root.parent))
-          print(out)
-          PY
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Brick.HW.Test.pak
-          path: Brick.HW.Test.pak.zip
+    chmod +x Brick.HW.Test.pak/launch.sh
+    chmod +x Brick.HW.Test.pak/hwtest.elf
