@@ -1,19 +1,72 @@
-- name: Build
-  shell: bash
-  run: |
-    set -e
-    mkdir -p Brick.HW.Test.pak
+name: Build Brick HW Test
 
-    SDL_CFLAGS="$(sdl-config --cflags)"
-    SDL_LIBS="$(sdl-config --libs)"
+on:
+  workflow_dispatch:
+  push:
 
-    ${CC:-aarch64-nextui-linux-gnu-gcc} \
-      $SDL_CFLAGS \
-      -O2 \
-      -o Brick.HW.Test.pak/hwtest.elf \
-      src/main.c \
-      $SDL_LIBS \
-      -lasound
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-    chmod +x Brick.HW.Test.pak/launch.sh
-    chmod +x Brick.HW.Test.pak/hwtest.elf
+    container:
+      image: ghcr.io/loveretro/tg5040-toolchain:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Brick HW Test
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p Brick.HW.Test.pak
+
+          CC="${CC:-aarch64-nextui-linux-gnu-gcc}"
+
+          echo "Compiler:"
+          $CC --version
+
+          echo "SDL:"
+          sdl-config --version || true
+
+          echo "Building..."
+
+          $CC \
+            $(sdl-config --cflags) \
+            -O2 \
+            -o Brick.HW.Test.pak/hwtest.elf \
+            src/main.c \
+            $(sdl-config --libs) \
+            -lasound
+
+          chmod +x Brick.HW.Test.pak/hwtest.elf
+          chmod +x Brick.HW.Test.pak/launch.sh
+
+          file Brick.HW.Test.pak/hwtest.elf
+
+      - name: Package
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          root = Path("Brick.HW.Test.pak")
+          output = Path("Brick.HW.Test.pak.zip")
+
+          with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as z:
+              for p in root.rglob("*"):
+                  if p.is_file():
+                      z.write(p, p.relative_to(root.parent))
+
+          print("Created:", output)
+          PY
+
+      - name: Upload Brick HW Test
+        uses: actions/upload-artifact@v4
+        with:
+          name: Brick.HW.Test.pak
+          path: Brick.HW.Test.pak.zip
