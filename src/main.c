@@ -1,147 +1,104 @@
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
+#include <SDL/SDL.h>
+#include <alsa/asoundlib.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <time.h>
 
-#define W 1024
-#define H 768
-#define MAXL 180
-#define MAXLINES 32
-
-static SDL_Window *win;
-static SDL_Renderer *ren;
-static TTF_Font *font;
-static char lines[MAXLINES][MAXL];
-static int nlines = 0;
-static int running = 1;
-
-static void addline(const char *s) {
-    if (nlines >= MAXLINES) return;
-    snprintf(lines[nlines], MAXL, "%s", s ? s : "");
-    nlines++;
-}
-
-static void add_file(const char *title, const char *path, int maxlines) {
-    FILE *f = fopen(path, "r");
-    char b[256];
-    int n = 0;
-    if (!f) return;
-    if (title) addline(title);
-    while (n < maxlines && fgets(b, sizeof(b), f)) {
-        b[strcspn(b, "\r\n")] = 0;
-        if (b[0]) addline(b);
-        n++;
-    }
-    fclose(f);
-}
-
-static void collect_safe(void) {
-    char b[256];
-    FILE *f;
-
-    addline("BRICK PRO HARDWARE TEST");
-    addline("SAFE AUDIO MODE - no aplay tests");
-    addline("");
-
-    f = fopen("/proc/device-tree/model", "r");
-    if (f) {
-        size_t k = fread(b, 1, sizeof(b)-1, f);
-        fclose(f);
-        b[k] = 0;
-        for (size_t i = 0; i < k; ++i) if (b[i] == 0) b[i] = ' ';
-        snprintf(b, sizeof(b), "Model: %s", b);
-        addline(b);
+static int probe_one(snd_pcm_format_t fmt, unsigned int rate) {
+    pid_t pid = fork();
+    if (pid < 0) return -2;
+    if (pid == 0) {
+        snd_pcm_t *pcm = NULL;
+        snd_pcm_hw_params_t *p = NULL;
+        int rc = snd_pcm_open(&pcm, "hw:0,0", SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+        if (rc < 0) _exit(1);
+        snd_pcm_hw_params_malloc(&p);
+        if (!p) { snd_pcm_close(pcm); _exit(1); }
+        rc = snd_pcm_hw_params_any(pcm, p);
+        if (rc >= 0) rc = snd_pcm_hw_params_test_format(pcm, p, fmt);
+        if (rc >= 0) rc = snd_pcm_hw_params_test_rate(pcm, p, rate, 0);
+        snd_pcm_hw_params_free(p);
+        snd_pcm_close(pcm);
+        _exit(rc >= 0 ? 0 : 1);
     }
 
-    add_file(NULL, "/proc/version", 1);
-
-    addline("");
-    addline("AUDIO / ALSA (read-only)");
-    add_file(NULL, "/proc/asound/cards", 4);
-    add_file(NULL, "/proc/asound/pcm", 8);
-    addline("");
-    addline("DAC / CODEC");
-    add_file(NULL, "/proc/asound/card0/codec#0", 10);
-    addline("");
-    addline("Raw report: .userdata/tg5040/logs/Brick_HW_Test_raw.txt");
-    addline("B / MENU = EXIT");
+    const int timeout_ms = 1200;
+    int elapsed = 0, status = 0;
+    while (elapsed < timeout_ms) {
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid)
+            return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 1 : 0;
+        if (r < 0) return -2;
+        usleep(20000);
+        elapsed += 20;
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    return -2;
 }
 
-static void draw_text(const char *s, int x, int y, SDL_Color c) {
-    SDL_Surface *sf = TTF_RenderUTF8_Blended(font, s, c);
-    if (!sf) return;
-    SDL_Texture *tx = SDL_CreateTextureFromSurface(ren, sf);
-    if (tx) {
-        SDL_Rect d = {x, y, sf->w, sf->h};
-        SDL_RenderCopy(ren, tx, NULL, &d);
-        SDL_DestroyTexture(tx);
+static const char *fmt_name(snd_pcm_format_t f) {
+    switch (f) {
+        case SND_PCM_FORMAT_S16_LE: return "S16_LE";
+        case SND_PCM_FORMAT_S24_LE: return "S24_LE";
+        case SND_PCM_FORMAT_S24_3LE: return "S24_3LE";
+        default: return "?";
     }
-    SDL_FreeSurface(sf);
 }
 
 int main(void) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) != 0) return 1;
-    if (TTF_Init() != 0) { SDL_Quit(); return 1; }
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) < 0) return 1;
+    SDL_Surface *screen = SDL_SetVideoMode(640, 480, 16, SDL_SWSURFACE);
+    if (!screen) { SDL_Quit(); return 1; }
 
-    win = SDL_CreateWindow("Brick HW Test", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                          W, H, SDL_WINDOW_SHOWN);
-    if (!win) { TTF_Quit(); SDL_Quit(); return 1; }
+    snd_pcm_format_t fmts[] = {
+        SND_PCM_FORMAT_S16_LE,
+        SND_PCM_FORMAT_S24_LE,
+        SND_PCM_FORMAT_S24_3LE
+    };
+    unsigned rates[] = {44100, 48000, 96000, 192000};
+    int result[3][4] = {{0}};
 
-    ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
-    if (!ren) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
-    if (!ren) { SDL_DestroyWindow(win); TTF_Quit(); SDL_Quit(); return 1; }
+    for (int i=0;i<3;i++)
+        for (int j=0;j<4;j++)
+            result[i][j] = probe_one(fmts[i], rates[j]);
 
-    font = TTF_OpenFont("./resource/font.ttf", 24);
-    if (!font) {
-        SDL_DestroyRenderer(ren); SDL_DestroyWindow(win);
-        TTF_Quit(); SDL_Quit(); return 1;
+    FILE *log = fopen("Brick_HW_Test_direct.txt", "w");
+    if (log) {
+        fprintf(log, "Direct ALSA PCM capability probe\n");
+        fprintf(log, "No audio data played\n\n");
+        for (int i=0;i<3;i++) {
+            fprintf(log, "%s:", fmt_name(fmts[i]));
+            for (int j=0;j<4;j++)
+                fprintf(log, " %u=%s", rates[j],
+                        result[i][j] == 1 ? "PASS" :
+                        result[i][j] == 0 ? "FAIL" : "TIMEOUT");
+            fprintf(log, "\n");
+        }
+        fclose(log);
     }
 
-    if (SDL_NumJoysticks() > 0) SDL_JoystickOpen(0);
+    /* Keep UI intentionally simple: results are also logged. */
+    SDL_Color white = {255,255,255,0};
+    SDL_FillRect(screen, NULL, SDL_MapRGB(screen->format, 0, 0, 0));
+    SDL_Flip(screen);
 
-    /* Build the report only from local, bounded file reads. No aplay/popen audio test. */
-    collect_safe();
-
-    SDL_Color fg = {236,234,229,255};
-    SDL_Color dim = {150,150,150,255};
-    SDL_Color accent = {232,227,64,255};
-    SDL_Event e;
-
+    int running = 1;
     while (running) {
+        SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) running = 0;
-            else if (e.type == SDL_KEYDOWN && !e.key.repeat &&
-                     (e.key.keysym.scancode == SDL_SCANCODE_ESCAPE ||
-                      e.key.keysym.scancode == SDL_SCANCODE_LALT ||
-                      e.key.keysym.scancode == SDL_SCANCODE_RETURN)) running = 0;
-            else if (e.type == SDL_JOYBUTTONDOWN) {
-                /* Known Brick/NextUI mapping: button 0 is B. Also accept common Menu buttons. */
-                if (e.jbutton.button == 0 || e.jbutton.button == 8 || e.jbutton.button == 9)
-                    running = 0;
+            if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_ESCAPE ||
+                    e.key.keysym.sym == SDLK_b ||
+                    e.key.keysym.sym == SDLK_m) running = 0;
             }
         }
-
-        SDL_SetRenderDrawColor(ren, 10, 10, 10, 255);
-        SDL_RenderClear(ren);
-        draw_text("BRICK HW TEST", 24, 18, accent);
-        int y = 64;
-        for (int i = 0; i < nlines; ++i) {
-            SDL_Color c = (i == 0) ? accent : fg;
-            if (strstr(lines[i], "Raw report") || strstr(lines[i], "B / MENU")) c = dim;
-            draw_text(lines[i], 24, y, c);
-            y += 22;
-            if (y > H - 28) break;
-        }
-        SDL_RenderPresent(ren);
         SDL_Delay(20);
     }
-
-    TTF_CloseFont(font);
-    SDL_DestroyRenderer(ren);
-    SDL_DestroyWindow(win);
-    TTF_Quit();
+    (void)white;
     SDL_Quit();
     return 0;
 }
