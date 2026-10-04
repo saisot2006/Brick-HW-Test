@@ -7,7 +7,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     container:
       image: ghcr.io/loveretro/tg5040-toolchain:latest
 
@@ -15,35 +14,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Brick HW Test
+      - name: Build
         shell: bash
         run: |
           set -e
 
           mkdir -p Brick.HW.Test.pak
 
-          CC="${CC:-aarch64-nextui-linux-gnu-gcc}"
-
           echo "Compiler:"
-          $CC --version
+          aarch64-nextui-linux-gnu-gcc --version
 
-          echo "SDL:"
-          sdl-config --version || true
+          echo "Building ALSA-only test..."
 
-          echo "Building..."
-
-          $CC \
-            $(sdl-config --cflags) \
+          aarch64-nextui-linux-gnu-gcc \
             -O2 \
             -o Brick.HW.Test.pak/hwtest.elf \
             src/main.c \
-            $(sdl-config --libs) \
             -lasound
 
           chmod +x Brick.HW.Test.pak/hwtest.elf
           chmod +x Brick.HW.Test.pak/launch.sh
-
-          file Brick.HW.Test.pak/hwtest.elf
 
       - name: Package
         shell: bash
@@ -65,7 +55,7 @@ jobs:
           print("Created:", output)
           PY
 
-      - name: Upload Brick HW Test
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Brick.HW.Test.pak
