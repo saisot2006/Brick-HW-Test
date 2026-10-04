@@ -1,75 +1,43 @@
-
 name: Build Brick HW Test
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
-    paths:
-      - "src/main.c"
-      - "Brick.HW.Test.pak/launch.sh"
-      - ".github/workflows/build.yml"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/loveretro/tg5040-toolchain:latest
-
+    container: ghcr.io/loveretro/tg5040-toolchain:latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Discover compiler and SDL2
-        id: d
-        run: |
-          set -e
-          CC=$(find / -maxdepth 10 -type f -iname 'aarch64*gcc*' 2>/dev/null | grep -v '\.so' | head -n1)
-          SDL_H=$(find / -maxdepth 10 -path '*/SDL2/SDL.h' 2>/dev/null | head -n1)
-          SDL_LIB=$(find / -maxdepth 10 -iname 'libSDL2.so*' 2>/dev/null | head -n1)
-          TTF_LIB=$(find / -maxdepth 10 -iname 'libSDL2_ttf.so*' 2>/dev/null | head -n1)
-          test -n "$CC"; test -n "$SDL_H"
-          echo "cc=$CC" >> "$GITHUB_OUTPUT"
-          echo "h=$SDL_H" >> "$GITHUB_OUTPUT"
-          echo "lib=$(dirname "$SDL_LIB")" >> "$GITHUB_OUTPUT"
-
-      - name: Get font
-        run: |
-          mkdir -p resource Brick.HW.Test.pak/resource
-          apt-get update -y && apt-get install -y fonts-dejavu-core
-          cp "$(find /usr/share/fonts -iname 'DejaVuSans.ttf' | head -n1)" resource/font.ttf
-          cp resource/font.ttf Brick.HW.Test.pak/resource/font.ttf
+      - uses: actions/checkout@v4
 
       - name: Build
+        shell: bash
         run: |
-          CC="${{ steps.d.outputs.cc }}"
-          H="${{ steps.d.outputs.h }}"
-          INC="$(dirname "$(dirname "$H")")"
-          LIB="${{ steps.d.outputs.lib }}"
-          mkdir -p Brick.HW.Test.pak/bin
-          "$CC" src/main.c -o Brick.HW.Test.pak/bin/hwtest.elf \
-            -O2 -mcpu=cortex-a53 \
-            -I"$INC" -L"$LIB" \
-            -lSDL2 -lSDL2_ttf -lm
-          chmod +x Brick.HW.Test.pak/bin/hwtest.elf Brick.HW.Test.pak/launch.sh
-          file Brick.HW.Test.pak/bin/hwtest.elf
+          set -e
+          mkdir -p Brick.HW.Test.pak
+          ${CC:-aarch64-linux-gnu-gcc} \
+            -O2 -o Brick.HW.Test.pak/hwtest.elf src/main.c \
+            $(sdl-config --cflags --libs 2>/dev/null || echo "") \
+            -lasound
+          chmod +x Brick.HW.Test.pak/launch.sh Brick.HW.Test.pak/hwtest.elf
 
-      - name: Package (no zip utility required)
+      - name: Package
+        shell: bash
         run: |
-          python3 - <<'PYZIP'
-          import os, zipfile
-          root = "Brick.HW.Test.pak"
-          out = "Brick.HW.Test.pak.zip"
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          out = Path("Brick.HW.Test.pak.zip")
+          root = Path("Brick.HW.Test.pak")
           with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-              for base, dirs, files in os.walk(root):
-                  for name in files:
-                      path = os.path.join(base, name)
-                      z.write(path, path)
-          print("created", out)
-          PYZIP
-          python3 -m zipfile -l Brick.HW.Test.pak.zip
+              for p in root.rglob("*"):
+                  if p.is_file():
+                      z.write(p, p.relative_to(root.parent))
+          print(out)
+          PY
 
-      - name: Upload PAK
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Brick.HW.Test.pak
